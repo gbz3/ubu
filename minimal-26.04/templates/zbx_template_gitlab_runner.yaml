@@ -1,0 +1,294 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: f73a7948a1ee4be289ca83a6f7841de0
+      name: Templates/Applications
+  templates:
+    - uuid: 3856b02385c94ec4a1917575219ec39e
+      template: 'GitLab Runner by Zabbix agent 2'
+      name: 'GitLab Runner by Zabbix agent 2'
+      description: |
+        GitLab Runner (Docker executor) の監視テンプレート。
+        - gitlab-runner / docker の systemd サービス状態
+        - Runner の Prometheus メトリクス (127.0.0.1:{$RUNNER.METRICS.PORT}/metrics を agent2 経由で取得)
+        - GitLab への TCP 到達性
+        前提: /etc/gitlab-runner/config.toml のグローバル部に listen_address = "127.0.0.1:9252" を設定すること。
+        OS 全般の監視は "Linux by Zabbix agent" を併用する。
+      groups:
+        - name: Templates/Applications
+      items:
+        - uuid: 313b49dd498646d99248ba4758fc6953
+          name: 'GitLab Runner: Service state'
+          key: 'systemd.unit.info[gitlab-runner.service]'
+          value_type: CHAR
+          history: 31d
+          trends: '0'
+          description: 'gitlab-runner.service の ActiveState (active / inactive / failed など)。active 以外は Runner が停止している。'
+          tags:
+            - tag: component
+              value: gitlab-runner
+          triggers:
+            - uuid: 74b0d87c33114b1eaed7f88a647361fa
+              expression: 'count(/GitLab Runner by Zabbix agent 2/systemd.unit.info[gitlab-runner.service],#3,"ne","active")=3'
+              name: 'GitLab Runner: Service is not running'
+              opdata: 'State: {ITEM.LASTVALUE1}'
+              priority: HIGH
+              description: 'gitlab-runner.service が 3 回連続で active ではない。CI ジョブが実行されない。journalctl -u gitlab-runner を確認する。'
+              tags:
+                - tag: component
+                  value: gitlab-runner
+                - tag: scope
+                  value: availability
+        - uuid: d95443caccee4dd793827ff19084ff9c
+          name: 'Docker: Service state'
+          key: 'systemd.unit.info[docker.service]'
+          value_type: CHAR
+          history: 31d
+          trends: '0'
+          description: 'docker.service の ActiveState。Docker executor は dockerd が停止するとジョブを実行できない。'
+          tags:
+            - tag: component
+              value: docker
+          triggers:
+            - uuid: be1028a1ae6f472db75c484036eb9583
+              expression: 'count(/GitLab Runner by Zabbix agent 2/systemd.unit.info[docker.service],#3,"ne","active")=3'
+              name: 'Docker: Service is not running'
+              opdata: 'State: {ITEM.LASTVALUE1}'
+              priority: HIGH
+              description: 'docker.service が 3 回連続で active ではない。Docker executor のジョブが実行できない。journalctl -u docker を確認する。'
+              tags:
+                - tag: component
+                  value: docker
+                - tag: scope
+                  value: availability
+        - uuid: 3be2eb2f69dc419ab2c245aebdace841
+          name: 'GitLab: TCP 443 reachability'
+          key: 'net.tcp.service[https,{$GITLAB.HOST},443]'
+          history: 31d
+          trends: 365d
+          description: 'Runner ホストから GitLab ({$GITLAB.HOST}) の HTTPS ポートへ接続できるか。1 = 接続可、0 = 接続不可。'
+          valuemap:
+            name: 'Service state'
+          tags:
+            - tag: component
+              value: gitlab-runner
+          triggers:
+            - uuid: 5ac9bf9d95e742ac897474ab9e7fefde
+              expression: 'max(/GitLab Runner by Zabbix agent 2/net.tcp.service[https,{$GITLAB.HOST},443],5m)=0'
+              name: 'GitLab Runner: Cannot reach GitLab ({$GITLAB.HOST}:443)'
+              priority: AVERAGE
+              description: '5 分間 GitLab の 443 番へ接続できない。Runner はジョブを受け取れない。DNS・経路・GitLab 側の障害を確認する。'
+              tags:
+                - tag: component
+                  value: gitlab-runner
+                - tag: scope
+                  value: availability
+        - uuid: 6426914a46954799ae26e172d88d834a
+          name: 'GitLab Runner: Metrics (raw)'
+          key: 'web.page.get[127.0.0.1,/metrics,{$RUNNER.METRICS.PORT}]'
+          value_type: TEXT
+          history: '0'
+          trends: '0'
+          description: 'Runner の Prometheus メトリクスを取得するマスターアイテム (保存しない)。HTTP ヘッダーを除去して依存アイテムへ渡す。'
+          preprocessing:
+            - type: REGEX
+              parameters:
+                - '\n\s?\n([\s\S]*)'
+                - '\1'
+          tags:
+            - tag: component
+              value: gitlab-runner
+            - tag: component
+              value: raw
+        - uuid: 0c3ce592f09946658cfee318669f6ffe
+          name: 'GitLab Runner: Jobs'
+          type: DEPENDENT
+          key: gitlab.runner.jobs
+          delay: '0'
+          history: 31d
+          trends: 365d
+          description: '現在処理中のジョブ数 (gitlab_runner_jobs の合計)。単位: 件。'
+          preprocessing:
+            - type: PROMETHEUS_PATTERN
+              parameters:
+                - gitlab_runner_jobs
+                - sum
+                - ''
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '0'
+          master_item:
+            key: 'web.page.get[127.0.0.1,/metrics,{$RUNNER.METRICS.PORT}]'
+          tags:
+            - tag: component
+              value: gitlab-runner
+        - uuid: 5086fbc18b36442bb4b067a45e49d6c0
+          name: 'GitLab Runner: Concurrent limit'
+          type: DEPENDENT
+          key: gitlab.runner.concurrent
+          delay: '0'
+          history: 31d
+          trends: 365d
+          description: 'config.toml の concurrent (同時実行ジョブ数の上限)。単位: 件。'
+          preprocessing:
+            - type: PROMETHEUS_PATTERN
+              parameters:
+                - gitlab_runner_concurrent
+                - value
+                - ''
+          master_item:
+            key: 'web.page.get[127.0.0.1,/metrics,{$RUNNER.METRICS.PORT}]'
+          tags:
+            - tag: component
+              value: gitlab-runner
+          triggers:
+            - uuid: 89d07261d5074c24902fef4094b7f07f
+              expression: 'nodata(/GitLab Runner by Zabbix agent 2/gitlab.runner.concurrent,10m)=1'
+              name: 'GitLab Runner: Metrics are not available'
+              priority: WARNING
+              description: '10 分間 Runner のメトリクスを取得できていない。config.toml の listen_address 設定、gitlab-runner の稼働、agent2 の稼働を確認する。'
+              dependencies:
+                - name: 'GitLab Runner: Service is not running'
+                  expression: 'count(/GitLab Runner by Zabbix agent 2/systemd.unit.info[gitlab-runner.service],#3,"ne","active")=3'
+              tags:
+                - tag: component
+                  value: gitlab-runner
+                - tag: scope
+                  value: availability
+        - uuid: cecdfc9208ee467d82c60c1aa9366698
+          name: 'GitLab Runner: Errors per minute'
+          type: DEPENDENT
+          key: gitlab.runner.errors.rate
+          delay: '0'
+          value_type: FLOAT
+          history: 31d
+          trends: 365d
+          units: '/m'
+          description: 'Runner が出力した error レベルのログ件数の 1 分あたり発生数 (gitlab_runner_errors_total{level="error"} の増加率)。'
+          preprocessing:
+            - type: PROMETHEUS_PATTERN
+              parameters:
+                - 'gitlab_runner_errors_total{level="error"}'
+                - sum
+                - ''
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '0'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+            - type: MULTIPLIER
+              parameters:
+                - '60'
+          master_item:
+            key: 'web.page.get[127.0.0.1,/metrics,{$RUNNER.METRICS.PORT}]'
+          tags:
+            - tag: component
+              value: gitlab-runner
+          triggers:
+            - uuid: 083a7a2eae90407bb4e54edff8b34d6f
+              expression: 'min(/GitLab Runner by Zabbix agent 2/gitlab.runner.errors.rate,10m)>{$RUNNER.ERRORS.MAX}'
+              name: 'GitLab Runner: Errors are occurring continuously'
+              opdata: 'Rate: {ITEM.LASTVALUE1}'
+              priority: WARNING
+              description: '10 分間、error ログが継続して出ている。journalctl -u gitlab-runner で内容を確認する。'
+              tags:
+                - tag: component
+                  value: gitlab-runner
+                - tag: scope
+                  value: notice
+        - uuid: c5bd36e4866a4b9eb3d5a3e0cd8f846f
+          name: 'GitLab Runner: GitLab API error responses per minute'
+          type: DEPENDENT
+          key: gitlab.runner.api.errors.rate
+          delay: '0'
+          value_type: FLOAT
+          history: 31d
+          trends: 365d
+          units: '/m'
+          description: 'Runner から GitLab API への要求のうち 4xx/5xx 応答の 1 分あたり発生数。継続する場合は Runner トークンの失効や GitLab 側障害が疑われる。'
+          preprocessing:
+            - type: PROMETHEUS_PATTERN
+              parameters:
+                - 'gitlab_runner_api_request_statuses_total{status=~"4..|5.."}'
+                - sum
+                - ''
+              error_handler: CUSTOM_VALUE
+              error_handler_params: '0'
+            - type: CHANGE_PER_SECOND
+              parameters:
+                - ''
+            - type: MULTIPLIER
+              parameters:
+                - '60'
+          master_item:
+            key: 'web.page.get[127.0.0.1,/metrics,{$RUNNER.METRICS.PORT}]'
+          tags:
+            - tag: component
+              value: gitlab-runner
+          triggers:
+            - uuid: decb904f5d8c4838a24bc33ef651d5c2
+              expression: 'min(/GitLab Runner by Zabbix agent 2/gitlab.runner.api.errors.rate,10m)>0'
+              name: 'GitLab Runner: GitLab API returns errors continuously'
+              opdata: 'Rate: {ITEM.LASTVALUE1}'
+              priority: WARNING
+              description: '10 分間、GitLab API が 4xx/5xx を返し続けている。Runner の登録トークン失効 (403) や GitLab 側の障害を確認する。'
+              tags:
+                - tag: component
+                  value: gitlab-runner
+                - tag: scope
+                  value: notice
+        - uuid: f2b6ad848d8d4a598c414d35d0514340
+          name: 'GitLab Runner: Version'
+          type: DEPENDENT
+          key: gitlab.runner.version
+          delay: '0'
+          value_type: CHAR
+          history: 31d
+          trends: '0'
+          description: 'GitLab Runner のバージョン (gitlab_runner_version_info の version ラベル)。'
+          preprocessing:
+            - type: PROMETHEUS_PATTERN
+              parameters:
+                - gitlab_runner_version_info
+                - label
+                - version
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1d
+          master_item:
+            key: 'web.page.get[127.0.0.1,/metrics,{$RUNNER.METRICS.PORT}]'
+          tags:
+            - tag: component
+              value: gitlab-runner
+      macros:
+        - macro: '{$GITLAB.HOST}'
+          value: gitlab.example.com
+          description: '監視対象 Runner が接続する GitLab のホスト名。ホスト側で上書きする。'
+        - macro: '{$RUNNER.ERRORS.MAX}'
+          value: '0'
+          description: 'error ログの 1 分あたり発生数の許容値。これを 10 分間超え続けると警告。'
+        - macro: '{$RUNNER.JOBS.FULL.TIME}'
+          value: 15m
+          description: 'ジョブ数が concurrent 上限に張り付いた状態をジョブ詰まりとみなす時間。'
+        - macro: '{$RUNNER.METRICS.PORT}'
+          value: '9252'
+          description: 'config.toml の listen_address で指定したメトリクスのポート (127.0.0.1 で待ち受け)。'
+      valuemaps:
+        - uuid: b1ca6b15cf54464097b528deeef59a73
+          name: 'Service state'
+          mappings:
+            - value: '0'
+              newvalue: Down
+            - value: '1'
+              newvalue: Up
+  triggers:
+    - uuid: 52579178c13540cd8c5b82023602cd2a
+      expression: 'min(/GitLab Runner by Zabbix agent 2/gitlab.runner.jobs,{$RUNNER.JOBS.FULL.TIME})>=last(/GitLab Runner by Zabbix agent 2/gitlab.runner.concurrent) and last(/GitLab Runner by Zabbix agent 2/gitlab.runner.concurrent)>0'
+      name: 'GitLab Runner: Jobs are saturated for {$RUNNER.JOBS.FULL.TIME}'
+      opdata: 'Jobs: {ITEM.LASTVALUE1} / Limit: {ITEM.LASTVALUE2}'
+      priority: WARNING
+      description: 'ジョブ数が concurrent 上限に張り付いている。後続ジョブが待たされている可能性がある。concurrent の引き上げや Runner の増設を検討する。'
+      tags:
+        - tag: component
+          value: gitlab-runner
+        - tag: scope
+          value: capacity
