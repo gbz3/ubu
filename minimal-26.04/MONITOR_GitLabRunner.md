@@ -41,7 +41,7 @@ gitlab-runner ──(127.0.0.1:9252/metrics)──> zabbix-agent2 ──(10050)�
 ## 0. 前提と変数
 
 - Runner サーバーは Ubuntu 26.04 minimal。GitLab Runner (Docker executor) は導入・登録済み。
-- Runner サーバーで ufw を使っている (SETUP_Zabbix.md 手順 2.2 と同様の構成)。
+- Runner サーバーで ufw を使っている (SETUP_Zabbix.md 手順 2.3 と同様の構成)。
 - Zabbix サーバーの ufw で、Runner サーバーが `AGENT_NET` に含まれている。
 
 Runner サーバーで作業するシェルで定義する:

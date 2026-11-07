@@ -20,7 +20,7 @@ Ubuntu 26.04 minimal に Zabbix サーバーを 1 台構成で導入する手順
 
 - 新規インストール直後の Ubuntu 26.04 minimal
 - sudo 可能な一般ユーザーで作業する
-- **SSH 公開鍵でログインできることを確認済み** (手順 2 でパスワード認証を無効化するため)
+- 作業用ユーザーで **パスワード認証による SSH ログインができる** (手順 2.1 で公開鍵を登録し、手順 2.2 でパスワード認証を無効化する)
 
 以降のコマンドで使う変数を、作業するシェルで最初に定義する。環境に合わせて値を変更すること。
 
@@ -63,21 +63,82 @@ sudo apt install -y language-pack-ja
 
 ## 2. 最低限のセキュリティ設定
 
-### 2.1 SSH
+### 2.1 SSH 公開鍵の登録
+
+パスワード認証でログインできる状態から、公開鍵でログインできるようにする。**2.1.1 と 2.1.3 は管理端末 (接続元の PC) で実施する。**
+
+#### 2.1.1 鍵ペアの作成 (管理端末)
+
+既に使っている鍵 (`~/.ssh/id_ed25519.pub` など) があれば作成は不要。
 
 ```bash
-sudo tee /etc/ssh/sshd_config.d/99-hardening.conf >/dev/null <<'EOF'
+ls ~/.ssh/id_ed25519.pub 2>/dev/null || ssh-keygen -t ed25519 -C "$(whoami)@$(hostname) zabbix"
+# パスフレーズの設定を推奨 (鍵ファイルが漏れた場合の保護)
+```
+
+#### 2.1.2 サーバー側の準備 (サーバー)
+
+```bash
+# 公開鍵認証が有効であること (Ubuntu の既定は yes)
+sudo sshd -T | grep -E '^(pubkeyauthentication|passwordauthentication|authorizedkeysfile)'
+
+# 作業用ユーザーの .ssh を用意 (ssh-copy-id でも作られるが、権限を確実にするため)
+install -d -m 700 ~/.ssh
+touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+```
+
+#### 2.1.3 公開鍵の登録 (管理端末)
+
+`<user>` は作業用ユーザー、`<server>` はサーバーのホスト名または IP。この時点ではパスワードを聞かれる。
+
+```bash
+ssh-copy-id -i ~/.ssh/id_ed25519.pub <user>@<server>
+```
+
+`ssh-copy-id` が無い環境 (Windows の PowerShell など) では次のようにする。
+
+```powershell
+type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh <user>@<server> "cat >> ~/.ssh/authorized_keys"
+```
+
+#### 2.1.4 鍵でログインできることの確認 (管理端末)
+
+```bash
+ssh -o PreferredAuthentications=publickey -o PasswordAuthentication=no <user>@<server> 'echo key login OK'
+```
+
+`key login OK` と表示されれば成功。パスワードを聞かれる、または `Permission denied (publickey)` になる場合は、2.2 に進まずに次を確認する。
+
+- サーバー側の権限: `~` が他ユーザーから書き込み不可、`~/.ssh` が 700、`~/.ssh/authorized_keys` が 600、所有者が作業用ユーザー
+- サーバー側のログ: `sudo journalctl -u ssh -n 50`
+- 管理端末側の詳細表示: `ssh -v ...`
+
+### 2.2 SSH の強化 (パスワード認証の無効化)
+
+**2.1.4 で鍵ログインを確認してから実施する。**
+
+sshd は同じ項目について **最初に読んだ値** を採用し、`/etc/ssh/sshd_config.d/*.conf` は名前順に読み込まれる。cloud-init 環境では `50-cloud-init.conf` に `PasswordAuthentication yes` が書かれていることがあるので、それより前に読まれる `00-` で始まる名前にする。
+
+```bash
+ls /etc/ssh/sshd_config.d/      # 既存ファイルの確認
+
+sudo tee /etc/ssh/sshd_config.d/00-hardening.conf >/dev/null <<'EOF'
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin no
 EOF
 
 sudo sshd -t && sudo systemctl reload ssh
+
+# 実際に有効な値の確認 (すべて no であること)
+sudo sshd -T | grep -E '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin)'
 ```
 
-> **締め出し防止**: reload 後も今のセッションは切らずに、別ターミナルから鍵で SSH ログインできることを確認してから次に進む。
+> **締め出し防止**: reload 後も今のセッションは切らずに、別ターミナルから次の 2 点を確認してから次に進む。
+> - 鍵でログインできる: `ssh <user>@<server>`
+> - パスワードでは拒否される: `ssh -o PubkeyAuthentication=no <user>@<server>` が `Permission denied (publickey)` になる
 
-### 2.2 ファイアウォール (ufw)
+### 2.3 ファイアウォール (ufw)
 
 SSH の許可ルールを入れてから有効化する。
 
