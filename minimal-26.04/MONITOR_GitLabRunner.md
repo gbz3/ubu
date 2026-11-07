@@ -3,7 +3,7 @@
 [SETUP_Zabbix.md](SETUP_Zabbix.md) で構築した Zabbix サーバーから、GitLab Runner (Docker executor) が稼働する Ubuntu 26.04 minimal サーバーを監視する手順。
 
 - テンプレート: [templates/zbx_template_gitlab_runner.yaml](templates/zbx_template_gitlab_runner.yaml)
-- 収集したデータを MCP 経由で Claude から参照する設定は対象外 (別の手順書で扱う)。そのための備えとしてタグ・ホストグループ・保存期間を揃えている (手順 6、付録 B)。
+- 収集したデータを MCP 経由で Claude から参照する設定は [MCP_Zabbix.md](MCP_Zabbix.md) で扱う。そのための備えとしてタグ・ホストグループ・保存期間を揃えている (手順 6、付録 B)。
 
 ## 監視設計
 
@@ -234,11 +234,13 @@ sudo systemctl restart zabbix-agent2
 > **注意**: docker グループのユーザーは、コンテナ経由でホストの root 権限を取得できる。agent2 が乗っ取られた場合の被害が大きくなるため、本手順の既定構成では採用していない。
 > また短命なジョブコンテナが検出のたびにアイテムを作成・削除するので、テンプレートのマクロ (`{$DOCKER.LLD.FILTER.CONTAINER.MATCHES}` など) で対象を絞ること。
 
-## 付録 B. 後で MCP から参照するための前提 (メモ)
+## 付録 B. MCP から参照するための前提
 
-MCP 経由で Claude から参照する設定は別の手順書で扱う。本手順の時点で、次のように揃えてある。
+MCP 経由で Claude から参照する設定は [MCP_Zabbix.md](MCP_Zabbix.md) で扱う。本手順の時点で、次のように揃えてある。
 
-- 対象ホストはホストグループ `CI/GitLab Runner` にまとめてある
-- アイテムとトリガーにタグ `component` / `scope` を付けてある (`item.get` / `problem.get` で絞り込める)
+- 対象ホストはホストグループ `CI/GitLab Runner` にまとめてある (MCP 用ユーザーグループに Read 権限を付ける)
+- アイテムとトリガーにタグ `component` / `scope` を付けてある (`item_get` / `problem_get` で絞り込める)
 - 数値アイテムは履歴 31 日・トレンド 365 日を保存する
 - アイテムの説明 (description) に意味と単位を書いてある
+
+> MCP の `history_get` で取得できるのは最大 7 日分で、トレンドを取得するツールは無い。7 日より前の傾向やトレンド 365 日分は Web UI のグラフで確認する。
